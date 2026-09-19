@@ -80,6 +80,13 @@ Panel {
     } else if (id === "a0") {
       Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.agent", "a0"])
     } else {
+      // The fallback hands the id to a helper as a positional arg; an id like
+      // "--force" is data that would arrive looking like a flag, so a leading
+      // dash is refused along with anything outside a plain id.
+      if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(id)) {
+        root.close()
+        return
+      }
       Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.agent", "omarchy-agent", id])
     }
     root.close()
@@ -300,8 +307,10 @@ Panel {
       + " · cache write " + usage.formatTokenCount(row.cacheWrite)
   }
 
-  // Only speaks up when the numbers cover more than this machine.
+  // Only speaks up when the numbers cover more than this machine — or when
+  // something the panel cannot fix itself needs saying.
   function footerText() {
+    if (usage.helperMissing) return "Update helper missing — install omarchy-agent-usage-update"
     if (usage.syncStatusText !== "") return usage.syncStatusText
     if (provider && provider.syncEnabled && provider.syncDeviceCount > 0)
       return "Merged from " + provider.syncDeviceCount + " device" + (provider.syncDeviceCount === 1 ? "" : "s")
@@ -337,8 +346,10 @@ Panel {
 
   // Nothing to report, nothing in the bar: Bar.qml collapses a slot whose item
   // is invisible, so the icon appears the moment the first scan finds usage and
-  // stays away entirely on a machine that has never run either CLI.
-  visible: providers.length > 0
+  // stays away entirely on a machine that has never run either CLI. The one
+  // exception is a missing update helper: the icon stays so the panel can say
+  // what to install instead of failing to an empty widget in silence.
+  visible: providers.length > 0 || usage.helperMissing
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -505,6 +516,7 @@ Panel {
                   anchors.centerIn: parent
                   visible: heroMarkImage.status !== Image.Ready
                   text: button.text
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.display
@@ -529,8 +541,11 @@ Panel {
             visible: root.providers.length === 0
             width: parent.width
             topPadding: Style.space(24)
-            text: "No AI coding subscriptions found.\nAgents show up here once you've used them."
+            text: usage.helperMissing
+              ? "Setup required: omarchy-agent-usage-update is missing.\nThis widget needs the helper at ~/.local/bin/omarchy-agent-usage-update (ships with Omarchy). It will fill in as soon as the helper is installed."
+              : "No AI coding subscriptions found.\nAgents show up here once you've used them."
             color: root.dim
+            textFormat: Text.PlainText
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             horizontalAlignment: Text.AlignHCenter
@@ -604,6 +619,7 @@ Panel {
 
                 Text {
                   text: "󰅙"
+                  textFormat: Text.PlainText
                   color: root.urgent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.title
@@ -613,6 +629,7 @@ Panel {
                 Text {
                   width: parent.width - Style.space(32)
                   text: root.provider ? (String(root.provider.usageStatusText || "") !== "" ? root.provider.usageStatusText : "Authentication Required") : ""
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -624,6 +641,7 @@ Panel {
               Text {
                 width: parent.width
                 text: root.provider ? String(root.provider.authHelpText || "Sign in or configure API keys to activate this agent.") : ""
+                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -676,6 +694,7 @@ Panel {
               Text {
                 id: balanceLabel
                 text: "Prepaid credits"
+                textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -686,6 +705,7 @@ Panel {
               Text {
                 id: balanceValue
                 text: root.balance ? root.formatMoney(root.balance.remaining, root.balance.currency) : ""
+                textFormat: Text.PlainText
                 color: root.balanceAlarming ? root.urgent : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -705,6 +725,7 @@ Panel {
               visible: text !== ""
               width: parent.width
               text: root.balanceDetailText(root.balance)
+              textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -811,6 +832,7 @@ Panel {
             width: parent.width
             topPadding: Style.space(2)
             text: root.footerText()
+            textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -840,6 +862,7 @@ Panel {
         // A model-scoped window is titled after its model, and those names run
         // long enough to reach the percentage, so the title gives way first.
         text: limitRow.window ? limitRow.window.title : ""
+        textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -855,6 +878,7 @@ Panel {
         text: limitRow.window && limitRow.window.percent >= 0
           ? Math.round(limitRow.window.percent * 100) + "%"
           : "—"
+        textFormat: Text.PlainText
         color: limitRow.alarming ? root.urgent : root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -876,6 +900,7 @@ Panel {
         var remainingMs = root.resetMsFor(limitRow.window)
         return remainingMs > 0 ? "Resets in " + root.formatDuration(remainingMs) : ""
       }
+      textFormat: Text.PlainText
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -926,6 +951,7 @@ Panel {
     Text {
       id: dayLabel
       text: root.dayLabel(dayRow.day ? dayRow.day.date : "", dayRow.today)
+      textFormat: Text.PlainText
       color: dayRow.today ? root.foreground : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -963,6 +989,7 @@ Panel {
     Text {
       id: dayValue
       text: usage.formatTokenCount(dayRow.day ? Number(dayRow.day.messageCount || 0) : 0)
+      textFormat: Text.PlainText
       color: dayRow.today ? root.foreground : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -1018,6 +1045,7 @@ Panel {
     Text {
       id: modelName
       text: modelRow.row ? modelRow.row.name : ""
+      textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
@@ -1032,6 +1060,7 @@ Panel {
     Text {
       id: modelTokens
       text: modelRow.row ? usage.formatTokenCount(modelRow.row.total) : ""
+      textFormat: Text.PlainText
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

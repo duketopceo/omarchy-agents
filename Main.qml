@@ -25,15 +25,41 @@ Item {
     id: listProcess
     running: false
     command: ["find", root.usageDir, "-maxdepth", "1", "-name", "*.json", "-printf", "%f\n"]
+    onExited: listDeadline.stop()
 
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyAgentListing(text)
     }
+
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("agents", "usage-dir find stderr: " + err.substring(0, 500))
+      }
+    }
+  }
+
+  // Every exec gets a watchdog: a hung child is killed and reaped instead of
+  // holding its slot (and every queued refresh behind it) forever.
+  Timer {
+    id: listDeadline
+    interval: 10000
+    onTriggered: {
+      if (listProcess.running) {
+        console.warn("agents", "usage-dir listing timed out; killing")
+        listProcess.signal(9)
+      }
+    }
   }
 
   function rescanAgents() {
-    if (!listProcess.running) listProcess.running = true
+    if (!listProcess.running) {
+      listDeadline.restart()
+      listProcess.running = true
+    }
   }
 
   function applyAgentListing(output) {
@@ -108,27 +134,87 @@ Item {
   }
 
   Component.onCompleted: {
+    checkHelper()
     rescanAgents()
     if (syncConfigured()) scheduleSync()
   }
 
   // -------------------------------------------------------------- refresh
 
-  property int refreshIntervalSec: Math.max(30, Number(setting("refreshIntervalSec", 900)))
+  // A non-numeric manual setting must not leave the timer with a NaN interval.
+  property int refreshIntervalSec: {
+    var n = Number(setting("refreshIntervalSec", 900))
+    return isFinite(n) ? Math.max(30, n) : 900
+  }
   property string pendingUpdateKind: ""
+
+  // The refresh helper is a hard runtime dependency this plugin does not
+  // ship. Rather than exec'ing a path that may not exist — and hiding the
+  // failure behind an empty widget — probe it and let the panel say so.
+  readonly property string updateBin: home + "/.local/bin/omarchy-agent-usage-update"
+  property bool helperAvailable: false
+  readonly property bool helperMissing: !helperAvailable
+
+  Process {
+    id: helperCheckProcess
+    running: false
+    command: ["test", "-x", root.updateBin]
+    onExited: function(exitCode) {
+      helperCheckDeadline.stop()
+      var present = exitCode === 0
+      var wasMissing = !root.helperAvailable
+      root.helperAvailable = present
+      // The helper just appeared: put real numbers behind the setup notice.
+      if (present && wasMissing) {
+        root.rescanAgents()
+        root.runUpdate("normal")
+      }
+    }
+
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("agents", "helper check stderr: " + err.substring(0, 500))
+      }
+    }
+  }
+
+  Timer {
+    id: helperCheckDeadline
+    interval: 10000
+    onTriggered: {
+      if (helperCheckProcess.running) {
+        console.warn("agents", "helper check timed out; killing")
+        helperCheckProcess.signal(9)
+      }
+    }
+  }
+
+  function checkHelper() {
+    if (!helperCheckProcess.running) {
+      helperCheckDeadline.restart()
+      helperCheckProcess.running = true
+    }
+  }
 
   Timer {
     interval: root.refreshIntervalSec * 1000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.runUpdate("normal")
+    onTriggered: {
+      root.checkHelper()
+      root.runUpdate("normal")
+    }
   }
 
   Process {
     id: updateProcess
     running: false
     onExited: {
+      updateDeadline.stop()
       root.rescanAgents()
       if (root.pendingUpdateKind !== "") {
         var kind = root.pendingUpdateKind
@@ -143,22 +229,50 @@ Item {
     }
   }
 
+  // The helper walks every transcript and calls billing endpoints; two
+  // minutes is generous for a healthy run and bounded for a hung one.
+  Timer {
+    id: updateDeadline
+    interval: 120000
+    onTriggered: {
+      if (updateProcess.running) {
+        console.warn("agents", "omarchy-agent-usage-update timed out; killing")
+        updateProcess.signal(9)
+      }
+    }
+  }
+
+  // Record ids and settings keys are data, not flags: anything that does not
+  // look like a plain id never reaches helper argv. The first character must
+  // not be a dash — "--force" is only letters and hyphens, so the body class
+  // alone cannot keep flag-shaped values out.
+  function isSafeArgValue(value) {
+    return /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(String(value || ""))
+  }
+
   function updateCommand(kind, agentIds) {
-    var updateBin = root.home + "/.local/bin/omarchy-agent-usage-update"
-    var command = [updateBin]
+    var command = [root.updateBin]
     if (kind === "force") command.push("--force")
     if (kind === "limits") command.push("--limits-only")
     var providers = settings && settings.providers ? settings.providers : {}
     for (var id in providers) {
-      if (providers[id] && providers[id].enabled === false) command.push("--except", id)
+      if (providers[id] && providers[id].enabled === false && isSafeArgValue(id)) command.push("--except", id)
     }
     if (agentIds) {
-      for (var i = 0; i < agentIds.length; i++) command.push(agentIds[i])
+      for (var i = 0; i < agentIds.length; i++) {
+        if (isSafeArgValue(agentIds[i])) command.push(String(agentIds[i]))
+      }
     }
     return command
   }
 
   function runUpdate(kind, agentIds) {
+    if (!root.helperAvailable) {
+      // The panel shows the setup-required state; keep probing so installing
+      // the helper is picked up without a shell restart.
+      root.checkHelper()
+      return
+    }
     if (updateProcess.running) {
       // Collapse queued requests to one full rerun; a forced refresh outranks
       // the cheaper kinds it might have been queued behind.
@@ -166,6 +280,7 @@ Item {
       return
     }
     updateProcess.command = updateCommand(kind, agentIds)
+    updateDeadline.restart()
     updateProcess.running = true
   }
 
@@ -218,7 +333,10 @@ Item {
   }
 
   function providerEnabled(id) {
-    var allowed = { claude: true, codex: true, cursor: true, devin: true, openrouter: true, agy: true, a0: true }
+    // Keep this set in lockstep with defaults.providers in manifest.json:
+    // an id in only one of them is either unreachable or an undeclared
+    // default-on provider.
+    var allowed = { claude: true, codex: true, fireworks: true, cursor: true, devin: true, openrouter: true, agy: true, a0: true }
     if (!settings || !settings.providers || !settings.providers[id]) return !!allowed[id]
     return settings.providers[id].enabled !== false && !!allowed[id]
   }
@@ -248,6 +366,24 @@ Item {
     }
   }
 
+  // Record- and sync-derived collections are iterated into delegates;
+  // bound them at the choke point so a malformed record cannot build an
+  // unbounded panel.
+  function capList(value, max) {
+    return Array.isArray(value) ? value.slice(0, max) : []
+  }
+
+  function capDict(value, max) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return ({})
+    var out = ({})
+    var n = 0
+    for (var key in value) {
+      if (++n > max) break
+      out[key] = value[key]
+    }
+    return out
+  }
+
   function displayProvider(record) {
     var stats = syncedStatsFor(String(record.id))
     var synced = !!stats
@@ -263,19 +399,19 @@ Item {
 
       // Rate limits and balances stay per-account and are never merged
       // across devices.
-      limits: Array.isArray(record.limits) ? record.limits : [],
+      limits: capList(record.limits, 16),
       tierLabel: String(record.tierLabel || ""),
       balance: balanceValue(record.balance),
 
       todayPrompts: synced ? numberValue(stats.todayPrompts) : numberValue(record.todayPrompts),
       todaySessions: synced ? numberValue(stats.todaySessions) : numberValue(record.todaySessions),
       todayTotalTokens: synced ? numberValue(stats.todayTotalTokens) : numberValue(record.todayTotalTokens),
-      todayTokensByModel: synced ? (stats.todayTokensByModel || ({})) : (record.todayTokensByModel || ({})),
-      recentDays: synced ? (stats.recentDays || []) : (record.recentDays || []),
+      todayTokensByModel: capDict(synced ? stats.todayTokensByModel : record.todayTokensByModel, 64),
+      recentDays: capList(synced ? stats.recentDays : record.recentDays, 31),
       totalPrompts: synced ? numberValue(stats.totalPrompts) : numberValue(record.totalPrompts),
       totalSessions: synced ? numberValue(stats.totalSessions) : numberValue(record.totalSessions),
       activeDays: synced ? numberValue(stats.activeDays) : numberValue(record.activeDays),
-      modelUsage: synced ? (stats.modelUsage || ({})) : (record.modelUsage || ({})),
+      modelUsage: capDict(synced ? stats.modelUsage : record.modelUsage, 64),
       hasLocalStats: synced ? (stats.hasLocalStats !== false) : (record.hasLocalStats !== false),
       hasPromptStats: synced ? (stats.hasPromptStats !== false) : (record.hasPromptStats !== false),
 
@@ -326,12 +462,33 @@ Item {
     running: false
     onRunningChanged: root.updateSyncRunning()
     onExited: function(exitCode) {
+      syncMkdirDeadline.stop()
       if (exitCode !== 0) {
         if (root.syncConfigured()) root.syncStatusText = "Usage sync mkdir failed"
         root.finishSyncRun()
         return
       }
       root.writeSyncSnapshot()
+    }
+
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err)
+          console.warn("agents/sync", "mkdir stderr: " + err.substring(0, 500))
+      }
+    }
+  }
+
+  Timer {
+    id: syncMkdirDeadline
+    interval: 15000
+    onTriggered: {
+      if (syncMkdirProcess.running) {
+        console.warn("agents/sync", "mkdir timed out; killing")
+        syncMkdirProcess.signal(9)
+      }
     }
   }
 
@@ -340,6 +497,7 @@ Item {
     running: false
     onRunningChanged: root.updateSyncRunning()
     onExited: function(exitCode) {
+      syncScanDeadline.stop()
       if (exitCode !== 0 && root.syncConfigured()) root.syncStatusText = "Usage sync scan failed"
       root.finishSyncRun()
     }
@@ -352,6 +510,19 @@ Item {
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: if (text.trim() !== "") console.warn("agents/sync", text.trim())
+    }
+  }
+
+  // The scan reads a shared, potentially network-mounted folder: bounded or
+  // it either hangs the merge or buffers unbounded data into shell memory.
+  Timer {
+    id: syncScanDeadline
+    interval: 60000
+    onTriggered: {
+      if (syncScanProcess.running) {
+        console.warn("agents/sync", "scan timed out; killing")
+        syncScanProcess.signal(9)
+      }
     }
   }
 
@@ -412,6 +583,7 @@ Item {
     syncRequestedWhileRunning = false
     syncStatusText = ""
     syncMkdirProcess.command = ["mkdir", "-p", root.syncEffectiveDir]
+    syncMkdirDeadline.restart()
     syncMkdirProcess.running = true
   }
 
@@ -429,8 +601,15 @@ Item {
       finishSyncRun()
       return
     }
-    var script = "dir=$0; [[ -d \"$dir\" ]] || exit 0; shopt -s nullglob; for f in \"$dir\"/*.json; do [[ -f \"$f\" ]] || continue; printf '===%s===\\n' \"$f\"; cat \"$f\"; printf '\\n=== EOM ===\\n'; done"
+    // find -type f refuses symlinks (a link to a regular file is -type l, and
+    // find does not follow links by default), -size caps each snapshot at
+    // 1 MiB, head -z bounds the file count, and head -c is the backstop if a
+    // file grows between find's stat and the read. Everything printed here is
+    // buffered by the collector and JSON.parsed, so none of it can be
+    // unbounded.
+    var script = "dir=$0; [[ -d \"$dir\" ]] || exit 0; while IFS= read -r -d '' f; do printf '===%s===\\n' \"$f\"; head -c 1048576 -- \"$f\"; printf '\\n=== EOM ===\\n'; done < <(find \"$dir\" -maxdepth 1 -type f ! -type l -name '*.json' -size -1048576c -print0 2>/dev/null | head -z -n 64)"
     syncScanProcess.command = ["bash", "-c", script, root.syncEffectiveDir]
+    syncScanDeadline.restart()
     syncScanProcess.running = true
   }
 
@@ -469,7 +648,15 @@ Item {
   }
 
   function parseSyncScanOutput(output) {
-    var lines = String(output || "").split("\n")
+    var text = String(output || "")
+    // The scan already caps at 64 files of at most 1 MiB plus frame markers;
+    // refuse anything wildly larger instead of splitting it into a giant
+    // line array.
+    if (text.length > 80 * 1024 * 1024) {
+      console.warn("agents/sync", "Ignoring oversized scan output:", text.length, "bytes")
+      return
+    }
+    var lines = text.split("\n")
     var snapshots = []
     var currentPath = ""
     var currentJson = []

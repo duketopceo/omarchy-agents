@@ -32,6 +32,21 @@
         },
         "fireworks": {
           "enabled": true
+        },
+        "cursor": {
+          "enabled": true
+        },
+        "devin": {
+          "enabled": true
+        },
+        "openrouter": {
+          "enabled": true
+        },
+        "agy": {
+          "enabled": true
+        },
+        "a0": {
+          "enabled": true
         }
       },
       "refreshIntervalSec": 900,
