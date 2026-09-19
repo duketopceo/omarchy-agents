@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "lukedaduke.agents",
   "name": "My Agents",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "lukedaduke",
   "license": "MIT",
   "description": "Claude Code, Codex, and Fireworks usage, limits, and pace in a native Omarchy bar panel.",
