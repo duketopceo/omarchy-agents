@@ -1,6 +1,15 @@
-# My Agents
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+    <img alt="Agents" src="assets/brand/wordmark.svg" width="260">
+  </picture>
+</p>
 
-A personal fork of the stock `omarchy.agents` widget for Omarchy, extended with extra provider support and custom display tweaks.
+<p align="center"><strong>Usage, limits and pace for every AI coding subscription, in one Omarchy bar panel.</strong></p>
+
+> Logo is a proposal pending owner sign-off. Screenshot: TODO, a real capture of the panel (roadmap U3); the current `preview.png` is only a bar crop.
+
+`lukedaduke.agents` is a personal fork of the stock `omarchy.agents` widget with extra providers (Claude, Codex, Fireworks, Cursor, Devin and others listed in `manifest.json`). It is a renderer: it reads usage records written by `omarchy-agent-usage-update` and ships no collectors.
 
 ## Install
 
@@ -9,36 +18,45 @@ omarchy plugin add https://github.com/duketopceo/omarchy-agents
 omarchy plugin enable lukedaduke.agents
 ```
 
-## What it shows
+Requires `omarchy-agent-usage-update` in `~/.local/bin/` (ships with Omarchy). If it is missing the panel shows a "Setup required" message. `omarchy-launch-tui` / `omarchy-agent` are optional, for the launch and login buttons.
 
-One bar icon and one panel for every AI coding subscription the machine reports. The panel is a read-only display: it watches usage records that `omarchy-agent-usage-update` writes to `~/.local/state/omarchy/agents/usage/` and renders whatever appears there.
+## What the panel shows
 
-- Hero row with provider, plan, and spend status
-- Subscription switch when more than one agent is enabled
-- Limit meter and reset timer
+- Hero row: provider, plan and spend status
+- A provider switch when more than one agent has data
+- Limit meter with pace, and reset timer
 - Prepaid balance and credit ledger
-- Tokens by day and tokens by model, with tooltips
+- Tokens by day and by model, with tooltips
 
-## Requirements
+With no enabled agents the widget hides itself from the bar, unless the helper is missing.
 
-This plugin is a renderer only — it ships no collectors. It needs:
+## How it works
 
-- `omarchy-agent-usage-update` at `~/.local/bin/` (ships with Omarchy). The panel checks for it and shows a "setup required" state if it is missing.
-- `omarchy-launch-tui` / `omarchy-agent` for the launch and login buttons (optional; display works without them).
+```mermaid
+flowchart LR
+  U[omarchy-agent-usage-update] -->|JSON records| D["~/.local/state/omarchy/agents/usage/"]
+  D -->|FileView watch| A[Agent.qml per record]
+  A --> P[Panel.qml]
+  S[(optional shared folder)] <-->|snapshots, Main.qml scan| P
+```
 
 ## Sync (optional)
 
-Set `syncMode` to `On` and point `syncDir` at a folder shared between machines (Syncthing, Dropbox, rsync). Each machine writes a snapshot named after `syncDeviceId`/`syncFileName` (default `<hostname>.json`) and merges the snapshots it finds. Snapshots over 1 MiB, symlinks, and non-regular files are skipped. `syncDeviceId` overrides the device name stored inside the aggregate.
+Set `syncMode` to `On` and `syncDir` to a folder shared between machines (Syncthing, Dropbox, rsync). Each machine writes `<hostname>.json` (override with `syncDeviceId` / `syncFileName`) and merges the snapshots it finds. Snapshots over 1 MiB, symlinks and non-regular files are skipped.
+
+## Status
+
+Known state: per the repo's `AGENTS.md`, the bar currently shows usage from Omarchy's stock `akitaonrails.ai-usagebar`, not this widget. See [ROADMAP.md](ROADMAP.md), [DESIGN.md](DESIGN.md), and the [landscape note](docs/research/2026-10-11-landscape.md).
+
+## Contributing
+
+This repo is the published subtree of [`duketopceo/omarchy-plugins`](https://github.com/duketopceo/omarchy-plugins) (`plugins/lukedaduke.agents/`). Make changes there; direct commits here are overwritten on the next publish.
 
 ## Remove
 
 ```bash
 omarchy plugin remove lukedaduke.agents
 ```
-
-## Notes
-
-This is intentionally a panel-only plugin. It does not write usage records; it only visualizes the ones already on disk. With no enabled agents the widget hides itself from the bar (unless the update helper is missing — see Requirements).
 
 ## License
 
