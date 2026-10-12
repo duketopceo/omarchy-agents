@@ -544,7 +544,8 @@ Panel {
             text: usage.helperMissing
               ? "Setup required: omarchy-agent-usage-update is missing.\nThis widget needs the helper at ~/.local/bin/omarchy-agent-usage-update (ships with Omarchy). It will fill in as soon as the helper is installed."
               : "No AI coding subscriptions found.\nAgents show up here once you've used them."
-            color: root.dim
+            // A missing helper is a fault, not an empty list: urgent colour.
+            color: usage.helperMissing ? root.urgent : root.dim
             textFormat: Text.PlainText
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
